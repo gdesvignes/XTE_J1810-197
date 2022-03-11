@@ -6,8 +6,6 @@ import numpy as np
 from ultranest import ReactiveNestedSampler, stepsampler
 from ultranest.mlfriends import RobustEllipsoidRegion
 import configparser
-from numba import njit
-#from numba.typed import List
 from rvm import rvm
 from numpy.random import default_rng
 
@@ -92,52 +90,6 @@ if (blockIdx.x*bs + tid < nlive) {
 
 get_L_gpu = mod.get_function("get_L_gpu")
 get_L_gpu2 = mod.get_function("get_L_gpu2")
-
-#@njit(fastmath=True)
-def get_L(cube, nQ, nU, xm, Qm, Um, have_EFAC, nEFAC, rcvr_lut):
-    
-        nfiles = len(xm)
-        zeta = np.deg2rad(cube[:,0])
-        betas = np.deg2rad(cube[:,1:1+nfiles])
-        phi0s = np.deg2rad(cube[:,1+nfiles:1+2*nfiles])
-        psi0s = np.deg2rad(cube[:,1+2*nfiles:1+3*nfiles])
-        
-        chi = np.zeros(cube.shape[0])       
-        logdet = np.zeros(cube.shape[0])
-        zeta = np.expand_dims(zeta, -1)
-        for ii in range(nfiles):
-            
-            beta = np.expand_dims(betas[:,ii], -1)
-            phi0 = np.expand_dims(phi0s[:,ii], -1)
-            psi0 = np.expand_dims(psi0s[:,ii], -1)
-
-            if have_EFAC:
-                EFAC = np.expand_dims(cube[:,1+3*nfiles+rcvr_lut[ii]], -1)
-            else:
-                EFAC = np.array([[1.]])
-
-            nQ2 = nQ[ii]*nQ[ii] * EFAC*EFAC
-            nU2 = nU[ii]*nU[ii] * EFAC*EFAC
-
-            x = np.expand_dims(xm[ii], axis=0)
-
-            # Compute the modelled PA            
-            zb = zeta-beta
-            sinzb = np.sin(zb)
-            xp = x-phi0
-
-            argx = np.cos(zb)*np.sin(zeta) - sinzb*np.cos(zeta)*np.cos(xp)
-            argy =  sinzb * np.sin(xp)
-
-            PA2 = 2*(-np.arctan(argy/argx) + psi0)
-            cos2PA = np.cos(PA2)
-            sin2PA = np.sin(PA2)
-
-            L = (Qm[ii] * cos2PA/nQ2 + Um[ii] * sin2PA/nU2) / (cos2PA*cos2PA/nQ2 + sin2PA*sin2PA/nU2) * np.exp(1j*PA2)
-            
-            chi += np.sum((Qm[ii]-np.real(L))**2 / nQ2 + (Um[ii]-np.imag(L))**2 / nU2, axis=-1)
-            logdet += len(Qm[ii]) * np.sum(np.log(nQ2) + np.log(nU2), axis=-1)
-        return -0.5 * chi -0.5*logdet
 
 class Precessnest():
     def __init__(self, filenames, sig=5, have_EFAC=False, config = None, nlive=512):
@@ -317,11 +269,9 @@ class Precessnest():
         return self.labels
 
     def Prior(self, cube):
-
         pcube = np.zeros(cube.shape)
         ipar = 0
 
-        # Zeta
         pcube[:,ipar] = cube[:,ipar]*(self.pZe[1]-self.pZe[0])+self.pZe[0]; ipar +=1
         pcube[:,ipar:ipar+self.nfiles] = cube[:,ipar:ipar+self.nfiles]*(self.pBe[1]-self.pBe[0])+self.pBe[0]; ipar += self.nfiles
         pcube[:,ipar:ipar+self.nfiles] = cube[:,ipar:ipar+self.nfiles]*(self.pPh[1]-self.pPh[0])+self.pPh[0]; ipar += self.nfiles
