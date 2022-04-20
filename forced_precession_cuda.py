@@ -6,6 +6,8 @@ import numpy as np
 from ultranest import ReactiveNestedSampler, stepsampler
 from ultranest.mlfriends import RobustEllipsoidRegion
 import configparser
+from numba import njit
+#from numba.typed import List
 from rvm import rvm
 from numpy.random import default_rng
 
@@ -36,7 +38,7 @@ float nQ2, nU2, PA2;
 
 if (Qi ==0 && Ui==0) sdata[threadIdx.x] = 0.0;
 else {
-  float zeta = cube[blockIdx.x*nparam] * 0.017453292519943295;
+  float alpha = cube[blockIdx.x*nparam] * 0.017453292519943295;
   float beta = cube[blockIdx.x*nparam + ifile + 1]* 0.017453292519943295;
   float phi0 = cube[blockIdx.x*nparam + ifile + gridDim.y + 1]* 0.017453292519943295;
   float psi0 = cube[blockIdx.x*nparam + ifile + gridDim.y*2 + 1]* 0.017453292519943295;
@@ -46,10 +48,10 @@ else {
   nU2 = nU[ifile] * EFAC*EFAC;
 
   // Compute the modelled PA
-  float zb = zeta-beta;
+  float zeta = alpha+beta;
   float xp = xm[ipt]-phi0;
-  float argx = cosf(zb)*sinf(zeta) - sinf(zb)*cosf(zeta)*cosf(xp);
-  float argy =  sinf(zb) * sinf(xp);
+  float argx = cosf(alpha)*sinf(zeta) - sinf(alpha)*cosf(zeta)*cosf(xp);
+  float argy =  sinf(alpha) * sinf(xp);
   float cos2PA, sin2PA;
   PA2 = -2*atanf(argy/argx) + 2*psi0;
   sincosf(PA2, &sin2PA, &cos2PA);
@@ -131,7 +133,7 @@ class Precessnest():
         if config.has_section('exc_phases'):
             self.exc_phs(config['exc_phases'])
             
-        self.set_pZeta(config['zeta'])
+        self.set_pAlpha(config['alpha'])
         self.set_pBeta(config['beta'])
         self.set_pPhi0(config['phi'])
         self.set_pPsi0(config['psi'])         
@@ -214,13 +216,13 @@ class Precessnest():
     def get_nEFAC(self):
         return self.nEFAC
 
-    def set_pZeta(self, pZe):
-        for item in pZe.items():
+    def set_pAlpha(self, pAl):
+        for item in pAl.items():
             key = item[0]; val=item[1]
 
         xval = np.array(val.rstrip().split(';'))            
         val = xval.astype(float)
-        self.pZe=(val[0],val[1])
+        self.pAl=(val[0],val[1])
         
     def __set_range(self, c):
         tmp = np.zeros((2, self.nfiles))
@@ -258,7 +260,7 @@ class Precessnest():
         self.pPs = self.__set_range(pPs)
         
     def set_labels(self):
-        self.labels.extend(["zeta"])
+        self.labels.extend(["alpha"])
         self.labels.extend(['beta_%d'%i for i in range(self.nfiles)])
         self.labels.extend(['phi0_%d'%i for i in range(self.nfiles)])
         self.labels.extend(['psi0_%d'%i for i in range(self.nfiles)])      
@@ -269,10 +271,11 @@ class Precessnest():
         return self.labels
 
     def Prior(self, cube):
+
         pcube = np.zeros(cube.shape)
         ipar = 0
 
-        pcube[:,ipar] = cube[:,ipar]*(self.pZe[1]-self.pZe[0])+self.pZe[0]; ipar +=1
+        pcube[:,ipar] = cube[:,ipar]*(self.pAl[1]-self.pAl[0])+self.pAl[0]; ipar +=1
         pcube[:,ipar:ipar+self.nfiles] = cube[:,ipar:ipar+self.nfiles]*(self.pBe[1]-self.pBe[0])+self.pBe[0]; ipar += self.nfiles
         pcube[:,ipar:ipar+self.nfiles] = cube[:,ipar:ipar+self.nfiles]*(self.pPh[1]-self.pPh[0])+self.pPh[0]; ipar += self.nfiles
         pcube[:,ipar:ipar+self.nfiles] = cube[:,ipar:ipar+self.nfiles]*(self.pPs[1]-self.pPs[0])+self.pPs[0]; ipar += self.nfiles
@@ -370,44 +373,32 @@ filenames = sys.argv[1:]
 cfgfilename = "config.ini"
 sig = 4 # Threshold for L (in sigma)
 have_EFAC = True
-nlive = 512 # Power of 2s for GPU
-frac_remain = 0.4
+nlive = 1024 # Power of 2s for GPU
+#nlive = 512
 cfg = configparser.ConfigParser(allow_no_value=True)
 cfg.read(cfgfilename)
 
 model = Precessnest(filenames, sig=sig, have_EFAC=have_EFAC, config=cfg, nlive=nlive)
 paramnames = model.get_labels()
-nsteps = 2*len(paramnames)
 
 # RUN THE ANALYSIS
-print("Free precession analysis using CUDA fp32")
 print("Ndim = %d\n"%len(paramnames))
 print("nEFAC = %d\n"%model.get_nEFAC())
-print("Nsteps = %d\n"%nsteps)
-print("Nsteps = %f\n"%frac_remain)
-print("Nlive = %d\n"%nlive)
-print("Using SpeedVariableRegionSliceSampler\n")
-sampler = ReactiveNestedSampler(paramnames, model.LogLikelihood_gpu, transform=model.Prior, vectorized=True, log_dir=".", num_test_samples=0, ndraw_min=2048)
+sampler = ReactiveNestedSampler(paramnames, model.LogLikelihood_gpu, transform=model.Prior, vectorized=True, log_dir=".", num_test_samples=0, ndraw_min=512)
+
+#sampler.run(min_num_live_points=nlive)
+nsteps = len(paramnames)
 # create step sampler:
 matrix = np.ones((nsteps, len(paramnames)), dtype=bool)
 matrix[int(nsteps/3):-1,-1] = False
-matrix[int(nsteps/3):-1,-2] = False
-matrix[int(nsteps/3):-1,-3] = False
+#matrix[int(nsteps/3):-1,-2] = False
+#matrix[int(nsteps/3):-1,-3] = False
 #matrix[2,-1] = False
-#sampler.stepsampler = stepsampler.SpeedVariableRegionSliceSampler(matrix, adaptive_nsteps='move-distance')
-#sampler.stepsampler = stepsampler.RegionSliceSampler(nsteps=200, adaptive_nsteps='move-distance')
-sampler.stepsampler = stepsampler.RegionBallSliceSampler(nsteps=len(paramnames),  adaptive_nsteps='move-distance')
-sampler.run(min_num_live_points=nlive, viz_callback=False, frac_remain=frac_remain)
+#sampler.stepsampler = stepsampler.SpeedVariableRegionSliceSampler(matrix)
+sampler.stepsampler = stepsampler.RegionSliceSampler(nsteps=200, adaptive_nsteps='move-distance')
+sampler.run(min_num_live_points=nlive, viz_callback=False)
 sampler.print_results()
 
-"""
 
-cube = default_rng(42).random((nlive,len(paramnames)))
-import time
-for i in range(6):
-        t = time.process_time()
-#        c = model.Prior(np.ones((nlive,len(paramnames)))); print("elapsed : ", time.process_time() - t)
-        l = model.LogLikelihood_gpu(cube)
-        #l = model.LogLikelihood_gpu(np.ones((nlive,len(paramnames))))
-        print("elapsed : ", time.process_time() - t, "LogL = ", l[0], l[1], l[2], l[nlive-1])
-"""
+
+
