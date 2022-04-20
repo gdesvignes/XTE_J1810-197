@@ -420,32 +420,44 @@ filenames = sys.argv[1:]
 cfgfilename = "config.ini"
 sig = 4 # Threshold for L (in sigma)
 have_EFAC = True
-nlive = 1024 # Power of 2s for GPU
-#nlive = 512
+nlive = 512 # Power of 2s for GPU
+frac_remain = 0.4
 cfg = configparser.ConfigParser(allow_no_value=True)
 cfg.read(cfgfilename)
 
 model = Precessnest(filenames, sig=sig, have_EFAC=have_EFAC, config=cfg, nlive=nlive)
 paramnames = model.get_labels()
+nsteps = 2*len(paramnames)
 
 # RUN THE ANALYSIS
+print("Free precession analysis using CUDA fp32")
 print("Ndim = %d\n"%len(paramnames))
 print("nEFAC = %d\n"%model.get_nEFAC())
-sampler = ReactiveNestedSampler(paramnames, model.LogLikelihood_gpu, transform=model.Prior, vectorized=True, log_dir=".", num_test_samples=0, ndraw_min=512)
-
-#sampler.run(min_num_live_points=nlive)
-nsteps = len(paramnames)
+print("Nsteps = %d\n"%nsteps)
+print("Nsteps = %f\n"%frac_remain)
+print("Nlive = %d\n"%nlive)
+print("Using SpeedVariableRegionSliceSampler\n")
+sampler = ReactiveNestedSampler(paramnames, model.LogLikelihood_gpu, transform=model.Prior, vectorized=True, log_dir=".", num_test_samples=0, ndraw_min=2048)
 # create step sampler:
 matrix = np.ones((nsteps, len(paramnames)), dtype=bool)
 matrix[int(nsteps/3):-1,-1] = False
-#matrix[int(nsteps/3):-1,-2] = False
-#matrix[int(nsteps/3):-1,-3] = False
+matrix[int(nsteps/3):-1,-2] = False
+matrix[int(nsteps/3):-1,-3] = False
 #matrix[2,-1] = False
-#sampler.stepsampler = stepsampler.SpeedVariableRegionSliceSampler(matrix)
-sampler.stepsampler = stepsampler.RegionSliceSampler(nsteps=200, adaptive_nsteps='move-distance')
-sampler.run(min_num_live_points=nlive, viz_callback=False)
+#sampler.stepsampler = stepsampler.SpeedVariableRegionSliceSampler(matrix, adaptive_nsteps='move-distance')
+#sampler.stepsampler = stepsampler.RegionSliceSampler(nsteps=200, adaptive_nsteps='move-distance')
+sampler.stepsampler = stepsampler.RegionBallSliceSampler(nsteps=len(paramnames),  adaptive_nsteps='move-distance')
+sampler.run(min_num_live_points=nlive, viz_callback=False, frac_remain=frac_remain)
 sampler.print_results()
 
+"""
 
-
-
+cube = default_rng(42).random((nlive,len(paramnames)))
+import time
+for i in range(6):
+        t = time.process_time()
+#        c = model.Prior(np.ones((nlive,len(paramnames)))); print("elapsed : ", time.process_time() - t)
+        l = model.LogLikelihood_gpu(cube)
+        #l = model.LogLikelihood_gpu(np.ones((nlive,len(paramnames))))
+        print("elapsed : ", time.process_time() - t, "LogL = ", l[0], l[1], l[2], l[nlive-1])
+"""
