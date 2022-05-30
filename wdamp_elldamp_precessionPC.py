@@ -9,7 +9,7 @@ from numba.typed import List
 from rvm import rvm
 import pypolychord
 from pypolychord.settings import PolyChordSettings
-from pypolychord.priors import UniformPrior, LogUniformPrior
+from pypolychord.priors import UniformPrior, LogUniformPrior, GaussianPrior
 
 try:
     from mpi4py import MPI
@@ -26,17 +26,17 @@ def dumper(live, dead, logweights, logZ, logZerr):
 
 @njit(fastmath=True)
 def get_L(cube, nQ, nU, xm, Qm, Um, mjds, have_EFAC, nEFAC, rcvr_lut):
-        nmpar = 8
+        nmpar = 9
         nfiles = len(xm)
         #print(cube, nQ)
         zeta = np.deg2rad(cube[0])
         theta0 = np.deg2rad(cube[1]) # the initial wobble angle
         chi = np.deg2rad(cube[2]) # the angle between the magnetic dipole and symmetric axis
-        Phi0 =  np.deg2rad(cube[3]) # the initial phase of the precession
-        epsilon0 = cube[4] # the initial ellipticity
-        tau = cube[5] # the damping timescale of the wobble angle
-        tau1 = cube[6] # the damping timescale of the ellipticity
-        t0 = cube[7] # the beginning time of the precession
+        Phi0 =  np.arctan2(cube[4],cube[3]) # the initial phase of the precession
+        epsilon0 = cube[5] # the initial ellipticity
+        tau = cube[6] # the damping timescale of the wobble angle
+        tau1 = cube[7] # the damping timescale of the ellipticity
+        t0 = cube[8] # the beginning time of the precession
         phi0s = np.deg2rad(cube[nmpar:nmpar+nfiles])
         psi0s = np.deg2rad(cube[nmpar+nfiles:nmpar+2*nfiles])
 
@@ -198,7 +198,8 @@ class Precessnest():
         self.labels.extend(["zeta"])
         self.labels.extend(["theta_0"])
         self.labels.extend(["chi"])
-        self.labels.extend(["Phi_0"])
+        self.labels.extend(["Phi_0_cos"])
+        self.labels.extend(["Phi_0_sin"])
         self.labels.extend(["Eps_0"])
         self.labels.extend(["tau_0"])
         self.labels.extend(["tau_1"])
@@ -218,14 +219,18 @@ class Precessnest():
         ipar = 0
 
         # Zeta
-        pcube[ipar] = cube[ipar]*(self.pZe[1]-self.pZe[0])+self.pZe[0]; ipar += 1
-        pcube[ipar] = UniformPrior(5,40) (cube[ipar]); ipar += 1
-        pcube[ipar] = UniformPrior(155,180) (cube[ipar]); ipar += 1
-        pcube[ipar] = UniformPrior(100,340) (cube[ipar]); ipar += 1
-        pcube[ipar] = LogUniformPrior(3e-6, 9e-6) (cube[ipar]); ipar += 1
-        pcube[ipar] = LogUniformPrior(20, 150) (cube[ipar]); ipar += 1
-        pcube[ipar] = LogUniformPrior(5, 50) (cube[ipar]); ipar += 1
-        pcube[ipar] = cube[ipar]*(20) + 58440; ipar += 1
+        #pcube[ipar] = cube[ipar]*(self.pZe[1]-self.pZe[0])+self.pZe[0]; ipar += 1
+        pcube[ipar] = GaussianPrior(160,2) (cube[ipar]); ipar += 1
+        pcube[ipar] = UniformPrior(26,90) (cube[ipar]); ipar += 1
+        pcube[ipar] = UniformPrior(130,260) (cube[ipar]); ipar += 1
+        pcube[ipar] = UniformPrior(-1,1) (cube[ipar]); ipar += 1
+        pcube[ipar] = UniformPrior(-1,1) (cube[ipar]); ipar += 1
+        pcube[ipar] = LogUniformPrior(1e-7, 8e-6) (cube[ipar]); ipar += 1
+        #pcube[ipar] = LogUniformPrior(20, 150) (cube[ipar]); ipar += 1
+        #pcube[ipar] = LogUniformPrior(5, 50) (cube[ipar]); ipar += 1
+        pcube[ipar] = LogUniformPrior(40, 120) (cube[ipar]); ipar += 1
+        pcube[ipar] = LogUniformPrior(40, 120) (cube[ipar]); ipar += 1
+        pcube[ipar] = cube[ipar]*(9) + 58440; ipar += 1
 
         pcube[ipar:ipar+self.nfiles] = cube[ipar:ipar+self.nfiles]*(self.pPh[1]-self.pPh[0])+self.pPh[0]; ipar += self.nfiles
         pcube[ipar:ipar+self.nfiles] = cube[ipar:ipar+self.nfiles]*(self.pPs[1]-self.pPs[0])+self.pPs[0]; ipar += self.nfiles
@@ -315,9 +320,9 @@ class Precessnest():
 # Input filenames
 filenames = sys.argv[1:]
 cfgfilename = "config.ini"
-sig = 4 # Threshold for L (in sigma)
+sig = 3 # Threshold for L (in sigma)
 have_EFAC = True
-nlive = 1500 # Power of 2s for GPU
+nlive = 2000 # Power of 2s for GPU
 #frac_remain = 0.1
 cfg = configparser.ConfigParser(allow_no_value=True)
 cfg.read(cfgfilename)
