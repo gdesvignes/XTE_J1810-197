@@ -9,7 +9,7 @@ from numba.typed import List
 from rvm import rvm
 import pypolychord
 from pypolychord.settings import PolyChordSettings
-from pypolychord.priors import UniformPrior
+from pypolychord.priors import UniformPrior, GaussianPrior, LogUniformPrior
 
 try:
     from mpi4py import MPI
@@ -98,8 +98,6 @@ class Precessnest():
 
         self.rcvr_lut = np.take(index, sorted_index, mode="clip")
 
-        #print(self.rcvr_lut)
-        
         # Check if we have to exclude phase range from the data
         if config.has_section('exc_phases'):
             self.exc_phs(config['exc_phases'])
@@ -184,14 +182,21 @@ class Precessnest():
         ipar = 0
 
         # Zeta
-        pcube[ipar] = cube[ipar]*(self.pAl[1]-self.pAl[0])+self.pAl[0]; ipar +=1
-        pcube[ipar:ipar+self.nfiles] = cube[ipar:ipar+self.nfiles]*(self.pBe[1]-self.pBe[0])+self.pBe[0]; ipar += self.nfiles
-        pcube[ipar:ipar+self.nfiles] = cube[ipar:ipar+self.nfiles]*(self.pPh[1]-self.pPh[0])+self.pPh[0]; ipar += self.nfiles
-        pcube[ipar:ipar+self.nfiles] = cube[ipar:ipar+self.nfiles]*(self.pPs[1]-self.pPs[0])+self.pPs[0]; ipar += self.nfiles
-        
+        pcube[ipar] = GaussianPrior(160,5) (cube[ipar]); ipar += 1
+        for ii in range(self.nfiles):
+            pcube[ipar+ii] = GaussianPrior((self.pBe[1][ii]+self.pBe[0][ii])/2., 5) (cube[ipar+ii]);
+        ipar += self.nfiles
+        for ii in range(self.nfiles):
+            pcube[ipar+ii] = GaussianPrior((self.pPh[1][ii]+self.pPh[0][ii])/2., 5) (cube[ipar+ii]);
+        ipar += self.nfiles
+        for ii in range(self.nfiles):
+            pcube[ipar+ii] = GaussianPrior((self.pPs[1][ii]+self.pPs[0][ii])/2., 5) (cube[ipar+ii])
+        ipar += self.nfiles
+
         # EFAC
         if self.have_EFAC:
-            pcube[ipar:ipar+self.nEFAC] = cube[ipar:ipar+self.nEFAC]*1.6+1
+            for ii in range(self.nEFAC):
+                pcube[ipar+ii] =  LogUniformPrior(0.2, 5) (cube[ipar+ii])
         return pcube
         
     def get_data(self, filename,sig=5):
@@ -270,7 +275,7 @@ class Precessnest():
 # Input filenames
 filenames = sys.argv[1:]
 cfgfilename = "config.ini"
-sig = 4 # Threshold for L (in sigma)
+sig = 3 # Threshold for L (in sigma)
 have_EFAC = True
 nlive = 1000 # Power of 2s for GPU
 #frac_remain = 0.1
@@ -285,16 +290,17 @@ nDerived = 0
 
 # RUN THE ANALYSIS
 settings = PolyChordSettings(ndims, nDerived)
-settings.file_root = 'forced_All2'
-#settings.nlive = ndims * 20
-settings.nlive = 2000
+settings.file_root = 'forcedLog'
+settings.nlive = ndims * 10
+if max(1000,settings.nlive)==1000:
+    settings.nlive = 1000
 settings.cluster_posteriors = False
 settings.do_clustering = False
+settings.write_dead = False
 settings.write_resume = False
 settings.read_resume = False
-settings.num_repeats = ndims * 12
+settings.num_repeats = ndims * 10
 settings.synchronous = False
-
 if rank==0:
     print("Forced precession analysis using CPUs fp64")
     print("Ndim = %d\n"%ndims)

@@ -9,7 +9,7 @@ from numba.typed import List
 from rvm import rvm
 import pypolychord
 from pypolychord.settings import PolyChordSettings
-from pypolychord.priors import UniformPrior
+from pypolychord.priors import UniformPrior, GaussianPrior, LogUniformPrior
 
 try:
     from mpi4py import MPI
@@ -108,18 +108,31 @@ class Precessnest():
         self.set_pBeta(config['beta'])
         self.set_pPhi0(config['phi'])
         self.set_pPsi0(config['psi'])         
-        
+
+        npts = 0
         for ii in range(self.nfiles):
+            if rank==0:
+                pfo = open("Profile_%d-PA.log"%ii, 'w')
+                xu = np.ma.getdata(self.xm[ii])
+                Uu = np.ma.getdata(self.Um[ii])
+                Qu = np.ma.getdata(self.Qm[ii])
+                PAs = np.rad2deg(0.5*np.arctan2(Uu, Qu))
+                PAes = 28.65 * self.nI[ii] / (Uu**2 + Qu**2)**.5
+                for m, x, PA, PAe in zip(self.xm[ii], np.rad2deg(xu), PAs, PAes):
+                    if m is np.ma.masked:
+                        pfo.write("%f %f %f 0\n"%(x, PA, PAe))
+                    else:
+                        pfo.write("%f %f %f 1\n"%(x, PA, PAe))
+                pfo.close()
+
             self.xm[ii] = self.xm[ii].compressed()
             self.Qm[ii] = self.Qm[ii].compressed()
             self.Um[ii] = self.Um[ii].compressed()
-
-            pfo = open("Profile_%d-PA.log"%ii, 'w')
-            for x,PA in zip(np.rad2deg(self.xm[ii]), np.rad2deg(0.5*np.arctan2(self.Um[ii],self.Qm[ii]))):
-                pfo.write("%f %f\n"%(x, PA))
-            pfo.close()
+            npts += len(self.xm[ii])
        
         self.set_labels()
+        if rank==0:
+            print("Total Npts = %d"%npts)
 
     def get_nEFAC(self):
         return self.nEFAC
@@ -184,14 +197,22 @@ class Precessnest():
         ipar = 0
 
         # Zeta
-        pcube[ipar] = cube[ipar]*(self.pZe[1]-self.pZe[0])+self.pZe[0]; ipar +=1
-        pcube[ipar:ipar+self.nfiles] = cube[ipar:ipar+self.nfiles]*(self.pBe[1]-self.pBe[0])+self.pBe[0]; ipar += self.nfiles
-        pcube[ipar:ipar+self.nfiles] = cube[ipar:ipar+self.nfiles]*(self.pPh[1]-self.pPh[0])+self.pPh[0]; ipar += self.nfiles
-        pcube[ipar:ipar+self.nfiles] = cube[ipar:ipar+self.nfiles]*(self.pPs[1]-self.pPs[0])+self.pPs[0]; ipar += self.nfiles
-        
+        pcube[ipar] = GaussianPrior(160,5) (cube[ipar]); ipar += 1
+        for ii in range(self.nfiles):
+            pcube[ipar+ii] = GaussianPrior((self.pBe[1][ii]+self.pBe[0][ii])/2., 5) (cube[ipar+ii]);
+        ipar += self.nfiles
+        for ii in range(self.nfiles):
+            pcube[ipar+ii] = GaussianPrior((self.pPh[1][ii]+self.pPh[0][ii])/2., 5) (cube[ipar+ii]);
+        ipar += self.nfiles
+        for ii in range(self.nfiles):
+            pcube[ipar+ii] = GaussianPrior((self.pPs[1][ii]+self.pPs[0][ii])/2., 5) (cube[ipar+ii])
+        ipar += self.nfiles
+
         # EFAC
         if self.have_EFAC:
-            pcube[ipar:ipar+self.nEFAC] = cube[ipar:ipar+self.nEFAC]*1.3+1
+            #pcube[ipar:ipar+self.nEFAC] = cube[ipar:ipar+self.nEFAC]*1.3+1
+            for ii in range(self.nEFAC):
+                pcube[ipar+ii] =  LogUniformPrior(0.2, 5) (cube[ipar+ii])
         return pcube
         
     def get_data(self, filename,sig=5):
@@ -224,28 +245,38 @@ class Precessnest():
         L = np.sqrt(Q*Q+U*U)
         PA = 0.5*np.arctan2(U,Q)
 
+        # Write Stokes Profile in ascii format
+        if rank==0:
+            pfo = open("Profile_%d-prof.log"%(len(self.rcvrs)-1), 'w')
+            for xi, Ii, Qi, Ui, Vi in zip(x,I,Q,U,V):
+                pfo.write("%f %f %f %f %f\n"%(xi, Ii, Qi, Ui, Vi))
+            pfo.close()
+            
         integ = ar.get_first_Integration()
         # Get baseline RMS (1) for total intensity (0)
         nI = np.sqrt((integ.baseline_stats()[1][0]))
         nQ = np.sqrt((integ.baseline_stats()[1][1]))
         nU = np.sqrt((integ.baseline_stats()[1][2]))
         
-        xm = np.ma.masked_where(L<sig*nI,x)
-        Qm = np.ma.masked_where(L<sig*nI,Q)
-        Um = np.ma.masked_where(L<sig*nI,U)
+        #xm = np.ma.masked_where(L<sig*nI,x)
+        #Qm = np.ma.masked_where(L<sig*nI,Q)
+        #Um = np.ma.masked_where(L<sig*nI,U)
+        xm = np.ma.masked_where(L<sig*nI,x).compressed()
+        Qm = np.ma.masked_where(L<sig*nI,Q).compressed()
+        Um = np.ma.masked_where(L<sig*nI,U).compressed()
         
         self.nI = np.append(self.nI, nI)
         self.nQ = np.append(self.nQ, nQ)
         self.nU = np.append(self.nU, nU)
-        self.xm.append(xm)
-        self.Qm.append(Qm)
-        self.Um.append(Um)
+        self.xm.append(np.ma.array(xm))
+        self.Qm.append(np.ma.array(Qm))
+        self.Um.append(np.ma.array(Um))
 
     def exc_phs(self, exc):
         # Check if we have the right number of inputs vs number of files
         if len(exc) < self.nfiles:
             raise ValueError("Number of input in config file (%d) does not match the number of profiles (%d)"%(len(exc), self.nfiles))
-            
+
         # For each entry in config file for phase range exclusion
         for iprof,key in enumerate(exc.keys()):            
             xval = np.array(exc[key].rstrip().split(';'))            
@@ -253,10 +284,13 @@ class Precessnest():
             # Mask data by range and compress later
             pairs = zip(val[::2], val[1::2])
             for p in pairs:
-                #print(p)
-                self.xm[iprof][int(p[0]*self.nbin[iprof]):int(p[1]*self.nbin[iprof])] = np.ma.masked
-                self.Qm[iprof][int(p[0]*self.nbin[iprof]):int(p[1]*self.nbin[iprof])] = np.ma.masked
-                self.Um[iprof][int(p[0]*self.nbin[iprof]):int(p[1]*self.nbin[iprof])] = np.ma.masked
+
+                for ip,phas in enumerate(self.xm[iprof]):
+                    if p[0]*2*np.pi <= phas and phas <= p[1]*2*np.pi:
+                
+                        self.xm[iprof][ip] = np.ma.masked
+                        self.Qm[iprof][ip] = np.ma.masked
+                        self.Um[iprof][ip] = np.ma.masked
                 
             if iprof+1== self.nfiles:
                 break
@@ -270,7 +304,7 @@ class Precessnest():
 # Input filenames
 filenames = sys.argv[1:]
 cfgfilename = "config.ini"
-sig = 4 # Threshold for L (in sigma)
+sig = 3 # Threshold for L (in sigma)
 have_EFAC = True
 nlive = 1000 # Power of 2s for GPU
 #frac_remain = 0.1
@@ -285,16 +319,17 @@ nDerived = 0
 
 # RUN THE ANALYSIS
 settings = PolyChordSettings(ndims, nDerived)
-settings.file_root = 'free_All2'
-settings.nlive = ndims * 20
-settings.nlive = 2000
+settings.file_root = 'freeLog'
+settings.nlive = ndims * 10
+if max(1000,settings.nlive)==1000:
+    settings.nlive = 1000
 settings.cluster_posteriors = False
 settings.do_clustering = False
+settings.write_dead = False
 settings.write_resume = False
 settings.read_resume = False
-settings.num_repeats = ndims * 12
+settings.num_repeats = ndims * 10
 settings.synchronous = False
-
 if rank==0:
     print("Free precession analysis using CPUs fp64")
     print("Ndim = %d\n"%ndims)
